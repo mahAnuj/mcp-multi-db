@@ -2,3 +2,7 @@ node_modules/
 build/
 data/*.db
 databases.json
+
+# demo scratch files (examples/demo.mjs cleans these up; ignore in case it aborts)
+examples/.demo.db
+examples/.demo.databases.json

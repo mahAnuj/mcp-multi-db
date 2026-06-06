@@ -17,6 +17,11 @@ safe to point at real data.
   metadata before it writes a query.
 - **Zero query language to learn** — just ask in natural language.
 
+![Demo: the MCP server listing databases, inspecting schema, running a read-only query, and refusing a write](docs/demo.gif)
+
+> The clip drives the real server over stdio (via the MCP SDK) against a seeded
+> SQLite database. Regenerate it with `npm run build && vhs examples/demo.tape`.
+
 ## Tools
 
 | Tool | Description |
