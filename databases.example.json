@@ -1,0 +1,25 @@
+{
+  "databases": [
+    {
+      "id": "local-sqlite",
+      "type": "sqlite",
+      "path": "/absolute/path/to/data/app.db",
+      "label": "Local dev SQLite",
+      "description": "Local SQLite database for development"
+    },
+    {
+      "id": "analytics-pg",
+      "type": "postgres",
+      "connectionString": "postgresql://user:pass@localhost:5432/analytics",
+      "label": "Analytics Warehouse",
+      "description": "Postgres read replica for BI queries"
+    },
+    {
+      "id": "reporting-mysql",
+      "type": "mysql",
+      "connectionString": "mysql://user:pass@localhost:3306/reporting",
+      "label": "Reporting MySQL",
+      "description": "Legacy MySQL reporting database"
+    }
+  ]
+}

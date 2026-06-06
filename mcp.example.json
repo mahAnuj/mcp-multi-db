@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mcp-multi-db": {
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-multi-db/build/index.js"],
+      "env": {
+        "MCP_DB_CONFIG": "/absolute/path/to/mcp-multi-db/databases.json"
+      }
+    }
+  }
+}

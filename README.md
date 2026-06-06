@@ -1,0 +1,200 @@
+# mcp-multi-db
+
+**One MCP server for all your SQL databases — read-only and safe by default.**
+
+Connect an AI agent to PostgreSQL, MySQL, and SQLite at the same time through a
+single [Model Context Protocol](https://modelcontextprotocol.io) server. List
+your databases in one config file and the agent picks which one to query by
+`database_id`. Every query is enforced read-only at the database level, so it's
+safe to point at real data.
+
+- **Multi-engine, one server** — Postgres, MySQL, and SQLite side by side; no
+  separate server per database.
+- **Read-only & safe by default** — two-layer enforcement (SQL-text guard +
+  database-level read-only transactions) plus row limits and query timeouts.
+  See [SECURITY.md](SECURITY.md).
+- **Schema-aware** — the agent can discover databases, tables/views, and column
+  metadata before it writes a query.
+- **Zero query language to learn** — just ask in natural language.
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_databases` | List configured database connections |
+| `list_tables` | List tables/views in a database |
+| `describe_table` | Show column metadata for a table |
+| `run_query` | Run read-only SQL (`SELECT`, `WITH`, `EXPLAIN`) |
+
+## Quick start
+
+### 1. Build
+
+```bash
+npm install
+npm run build
+```
+
+### 2. Create `databases.json`
+
+Copy the example and edit with your connection details:
+
+```bash
+cp databases.example.json databases.json
+```
+
+```json
+{
+  "databases": [
+    {
+      "id": "local-sqlite",
+      "type": "sqlite",
+      "path": "/absolute/path/to/app.db",
+      "label": "Local dev SQLite"
+    },
+    {
+      "id": "analytics-pg",
+      "type": "postgres",
+      "connectionString": "postgresql://user:pass@localhost:5432/analytics",
+      "label": "Analytics Warehouse"
+    },
+    {
+      "id": "reporting-mysql",
+      "type": "mysql",
+      "connectionString": "mysql://user:pass@localhost:3306/reporting",
+      "label": "Reporting MySQL"
+    }
+  ]
+}
+```
+
+> **Never commit `databases.json`** — it contains credentials. It's already
+> gitignored. Prefer read-only database users (see [Security](#security)).
+
+### 3. Register the server with your MCP client
+
+The server speaks MCP over **stdio**, so it works with any MCP-capable client.
+Point the client at the built `build/index.js` and pass `MCP_DB_CONFIG` (the
+path to your `databases.json`). See [mcp.example.json](mcp.example.json) and
+[databases.example.json](databases.example.json) for templates.
+
+<details open>
+<summary><b>Claude Desktop</b></summary>
+
+Edit `claude_desktop_config.json` (macOS:
+`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "mcp-multi-db": {
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-multi-db/build/index.js"],
+      "env": {
+        "MCP_DB_CONFIG": "/absolute/path/to/mcp-multi-db/databases.json"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop afterward.
+</details>
+
+<details>
+<summary><b>Claude Code</b></summary>
+
+```bash
+claude mcp add mcp-multi-db \
+  --env MCP_DB_CONFIG=/absolute/path/to/mcp-multi-db/databases.json \
+  -- node /absolute/path/to/mcp-multi-db/build/index.js
+```
+</details>
+
+<details>
+<summary><b>Cursor</b></summary>
+
+Add to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in your project), then open
+**Cursor Settings → Tools & MCP**, restart the server, and use **Agent** mode:
+
+```json
+{
+  "mcpServers": {
+    "mcp-multi-db": {
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-multi-db/build/index.js"],
+      "env": {
+        "MCP_DB_CONFIG": "/absolute/path/to/mcp-multi-db/databases.json"
+      }
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Cline / Windsurf / other MCP clients</b></summary>
+
+Any client that supports stdio MCP servers uses the same shape: command `node`,
+args `["/absolute/path/to/mcp-multi-db/build/index.js"]`, and env
+`MCP_DB_CONFIG` pointing at your `databases.json`. Consult your client's docs
+for where its MCP config lives.
+</details>
+
+## Configuration reference
+
+Config is loaded from one of two environment variables, in order:
+
+1. **`MCP_DB_CONFIG`** — path to a JSON file (recommended).
+2. **`MCP_DATABASES`** — inline JSON (useful when a file path is awkward).
+
+The JSON may be either `{ "databases": [ ... ] }` or a bare array. Each entry:
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `id` | yes | Unique; the agent references this as `database_id` |
+| `type` | yes | `postgres` \| `mysql` \| `sqlite` |
+| `connectionString` | postgres/mysql | Standard connection URI |
+| `path` | sqlite | Absolute path to the `.db` file |
+| `label` | no | Human-friendly name shown to the agent |
+| `description` | no | Extra context shown to the agent |
+
+## Example prompts
+
+- "List my configured databases"
+- "What tables are in `local-sqlite`?"
+- "Describe the `users` table in `analytics-pg`"
+- "Run `SELECT COUNT(*) FROM orders` on `reporting-mysql`"
+
+## Security
+
+- **Read-only only.** `INSERT`, `UPDATE`, `DELETE`, DDL, etc. are blocked — both
+  by a SQL-text guard and by running each query inside a database-level
+  read-only transaction (SQLite opens read-only). A `SELECT` that calls a
+  side-effecting function is still refused.
+- **Row limits.** Results are capped (default 100, max 1000).
+- **Query timeouts.** Statements are bounded (30s) to avoid runaway queries.
+- **Use least privilege anyway.** Prefer dedicated read-only DB users and read
+  replicas. Full details and reporting in [SECURITY.md](SECURITY.md).
+
+## Development
+
+```bash
+npm install
+npm run build     # tsc -> build/, the artifact MCP clients run
+npm test          # builds, then runs the node:test suite
+```
+
+Tests use Node's built-in test runner (no extra dependencies) and cover the
+read-only SQL guard and the SQLite adapter end to end. CI runs build + tests on
+every push and pull request.
+
+Adding another database engine is a contained change: add the config variant in
+[`src/config.ts`](src/config.ts), implement the `SqlDatabasePort` interface in a
+new adapter under [`src/adapters/`](src/adapters/), and register it in the
+adapter factory. New adapters must enforce read-only at the connection level —
+not rely on the text guard alone.
+
+## License
+
+ISC — see [LICENSE](LICENSE).
