@@ -198,7 +198,18 @@ Adding another database engine is a contained change: add the config variant in
 [`src/config.ts`](src/config.ts), implement the `SqlDatabasePort` interface in a
 new adapter under [`src/adapters/`](src/adapters/), and register it in the
 adapter factory. New adapters must enforce read-only at the connection level —
-not rely on the text guard alone.
+not rely on the text guard alone. See [docs/extending.md](docs/extending.md) for
+the full checklist.
+
+## Documentation
+
+- **[Architecture](docs/architecture.md)** — components, request lifecycle, and
+  the port-family design (with diagrams).
+- **[Extending](docs/extending.md)** — add a SQL engine or a non-SQL family.
+- **[Security](SECURITY.md)** — the two-layer read-only model and safe
+  deployment.
+
+The full index is in [docs/](docs/README.md).
 
 ## License
 

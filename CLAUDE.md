@@ -22,6 +22,8 @@ MCP_DB_CONFIG=./databases.json node build/index.js
 
 ## Architecture
 
+Deeper reference docs (with diagrams) live in [docs/](docs/README.md) — [docs/architecture.md](docs/architecture.md) for the component map + `run_query` lifecycle, [docs/extending.md](docs/extending.md) for adding an engine. Keep them in sync when the architecture changes.
+
 A **read-only** MCP server (stdio transport) that exposes SQL queries over PostgreSQL, MySQL, and SQLite to MCP clients (e.g. Cursor). Layers, from entry point outward:
 
 - **`src/index.ts`** — wires everything: load config → build `DatabaseRegistry` → wrap in `DatabaseService` → `registerTools` → connect `StdioServerTransport`.
