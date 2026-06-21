@@ -1,5 +1,9 @@
 # mcp-multi-db
 
+[![npm version](https://img.shields.io/npm/v/mcp-multi-db.svg)](https://www.npmjs.com/package/mcp-multi-db)
+[![npm downloads](https://img.shields.io/npm/dm/mcp-multi-db.svg)](https://www.npmjs.com/package/mcp-multi-db)
+[![license](https://img.shields.io/npm/l/mcp-multi-db.svg)](LICENSE)
+
 **One MCP server for all your SQL databases — read-only and safe by default.**
 
 Connect an AI agent to PostgreSQL, MySQL, and SQLite at the same time through a
@@ -33,14 +37,9 @@ safe to point at real data.
 
 ## Quick start
 
-### 1. Build
+No install needed — `npx` fetches the package on first use.
 
-```bash
-npm install
-npm run build
-```
-
-### 2. Create `databases.json`
+### 1. Create `databases.json`
 
 Copy the example and edit with your connection details:
 
@@ -74,13 +73,14 @@ cp databases.example.json databases.json
 ```
 
 > **Never commit `databases.json`** — it contains credentials. It's already
-> gitignored. Prefer read-only database users (see [Security](#security)).
+> gitignored if you cloned the repo. Prefer read-only database users (see
+> [Security](#security)).
 
-### 3. Register the server with your MCP client
+### 2. Register the server with your MCP client
 
 The server speaks MCP over **stdio**, so it works with any MCP-capable client.
-Point the client at the built `build/index.js` and pass `MCP_DB_CONFIG` (the
-path to your `databases.json`). See [mcp.example.json](mcp.example.json) and
+Use `npx mcp-multi-db` as the command and pass `MCP_DB_CONFIG` (the path to
+your `databases.json`). See [mcp.example.json](mcp.example.json) and
 [databases.example.json](databases.example.json) for templates.
 
 <details open>
@@ -93,10 +93,10 @@ Edit `claude_desktop_config.json` (macOS:
 {
   "mcpServers": {
     "mcp-multi-db": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-multi-db/build/index.js"],
+      "command": "npx",
+      "args": ["-y", "mcp-multi-db"],
       "env": {
-        "MCP_DB_CONFIG": "/absolute/path/to/mcp-multi-db/databases.json"
+        "MCP_DB_CONFIG": "/absolute/path/to/databases.json"
       }
     }
   }
@@ -111,8 +111,8 @@ Restart Claude Desktop afterward.
 
 ```bash
 claude mcp add mcp-multi-db \
-  --env MCP_DB_CONFIG=/absolute/path/to/mcp-multi-db/databases.json \
-  -- node /absolute/path/to/mcp-multi-db/build/index.js
+  --env MCP_DB_CONFIG=/absolute/path/to/databases.json \
+  -- npx -y mcp-multi-db
 ```
 </details>
 
@@ -126,10 +126,10 @@ Add to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in your project), then open
 {
   "mcpServers": {
     "mcp-multi-db": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-multi-db/build/index.js"],
+      "command": "npx",
+      "args": ["-y", "mcp-multi-db"],
       "env": {
-        "MCP_DB_CONFIG": "/absolute/path/to/mcp-multi-db/databases.json"
+        "MCP_DB_CONFIG": "/absolute/path/to/databases.json"
       }
     }
   }
@@ -140,10 +140,12 @@ Add to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in your project), then open
 <details>
 <summary><b>Cline / Windsurf / other MCP clients</b></summary>
 
-Any client that supports stdio MCP servers uses the same shape: command `node`,
-args `["/absolute/path/to/mcp-multi-db/build/index.js"]`, and env
-`MCP_DB_CONFIG` pointing at your `databases.json`. Consult your client's docs
-for where its MCP config lives.
+Any client that supports stdio MCP servers uses the same shape: command `npx`,
+args `["-y", "mcp-multi-db"]`, and env `MCP_DB_CONFIG` pointing at your
+`databases.json`. Consult your client's docs for where its MCP config lives.
+
+> **Prefer a pinned global install?** `npm install -g mcp-multi-db`, then use
+> command `mcp-multi-db` with no args.
 </details>
 
 ## Configuration reference

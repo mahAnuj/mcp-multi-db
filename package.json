@@ -1,7 +1,7 @@
 {
   "name": "mcp-multi-db",
   "version": "1.0.0",
-  "description": "Read-only MCP server for PostgreSQL, MySQL, and SQLite",
+  "description": "Read-only MCP server for PostgreSQL, MySQL, and SQLite — one server, one config, one set of tools across multiple databases.",
   "license": "ISC",
   "author": "Anuj Mahajan",
   "type": "module",
@@ -10,11 +10,41 @@
     "mcp-multi-db": "./build/index.js"
   },
   "files": [
-    "build"
+    "build",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mahAnuj/mcp-multi-db.git"
+  },
+  "homepage": "https://github.com/mahAnuj/mcp-multi-db#readme",
+  "bugs": {
+    "url": "https://github.com/mahAnuj/mcp-multi-db/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "llm-tools",
+    "ai-agents",
+    "database",
+    "postgres",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "sql",
+    "read-only",
+    "schema-introspection"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc && chmod 755 build/index.js",
-    "test": "npm run build && node --test \"test/**/*.test.ts\""
+    "test": "npm run build && node --test \"test/**/*.test.ts\"",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
