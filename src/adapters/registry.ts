@@ -29,6 +29,13 @@ export class DatabaseRegistry {
 
     const config = this.configs.find((entry) => entry.id === databaseId);
     if (!config) {
+      if (this.configs.length === 0) {
+        throw new Error(
+          `No databases are configured. Set MCP_DB_CONFIG to the path of ` +
+            `your databases.json (or MCP_DATABASES with inline JSON), then ` +
+            `restart the MCP server. See https://github.com/mahAnuj/mcp-multi-db`,
+        );
+      }
       const available = this.configs.map((entry) => entry.id).join(", ");
       throw new Error(
         `Unknown database_id "${databaseId}". Call list_databases first. Available: ${available}`,

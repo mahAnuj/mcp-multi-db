@@ -13,7 +13,7 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "mcp-multi-db",
-    version: "1.0.0",
+    version: "1.0.1",
   });
 
   registerTools(server, service);
