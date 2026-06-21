@@ -1,0 +1,26 @@
+node_modules
+build
+data
+.git
+.github
+.claude
+.vscode
+.idea
+*.log
+.DS_Store
+
+# Local config — never bake credentials into the image.
+databases.json
+.env
+.env.*
+
+# Docs and dev-only assets — keep the image small.
+docs
+examples
+test
+launch
+RELEASE_NOTES_*.md
+CLAUDE.md
+
+# npm metadata not needed in container
+.npmrc

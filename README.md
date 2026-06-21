@@ -184,6 +184,24 @@ The JSON may be either `{ "databases": [ ... ] }` or a bare array. Each entry:
 - **Use least privilege anyway.** Prefer dedicated read-only DB users and read
   replicas. Full details and reporting in [SECURITY.md](SECURITY.md).
 
+## Docker
+
+A multi-stage [`Dockerfile`](Dockerfile) is included. Build and run with your
+`databases.json` mounted in:
+
+```bash
+docker build -t mcp-multi-db .
+
+docker run --rm -i \
+  -v /absolute/path/to/databases.json:/config/databases.json:ro \
+  mcp-multi-db
+```
+
+The image runs as a non-root user, ships only the built JS and runtime
+`node_modules` (no toolchain), and speaks MCP over stdio just like the npx
+install — so it slots into any MCP client by replacing the `command` and
+`args` with the appropriate `docker run -i` invocation.
+
 ## Development
 
 ```bash
