@@ -3,8 +3,11 @@
 [![npm version](https://img.shields.io/npm/v/mcp-multi-db.svg)](https://www.npmjs.com/package/mcp-multi-db)
 [![npm downloads](https://img.shields.io/npm/dm/mcp-multi-db.svg)](https://www.npmjs.com/package/mcp-multi-db)
 [![license](https://img.shields.io/npm/l/mcp-multi-db.svg)](LICENSE)
+[![mcp-multi-db MCP server](https://glama.ai/mcp/servers/mahAnuj/mcp-multi-db/badges/score.svg)](https://glama.ai/mcp/servers/mahAnuj/mcp-multi-db)
 
 **One MCP server for all your SQL databases — read-only and safe by default.**
+
+[![mcp-multi-db MCP server card](https://glama.ai/mcp/servers/mahAnuj/mcp-multi-db/badges/card.svg)](https://glama.ai/mcp/servers/mahAnuj/mcp-multi-db)
 
 Connect an AI agent to PostgreSQL, MySQL, and SQLite at the same time through a
 single [Model Context Protocol](https://modelcontextprotocol.io) server. List
