@@ -36,13 +36,15 @@ COPY --from=build --chown=node:node /app/build ./build
 
 USER node
 
+# Default config — empty registry. Lets the server boot under directory
+# smoke tests (Glama, Smithery) that invoke the container without mounting
+# a databases.json. Users in real deployments override MCP_DB_CONFIG to
+# point at their own config (e.g. /config/databases.json mounted from host).
+COPY --chown=node:node docker/default-config.json /app/config.json
+
 # MCP servers speak over stdio by default — no port to expose, no HEALTHCHECK
-# that hits a port. The Glama harness invokes the binary and talks JSON-RPC
-# over stdin/stdout.
-#
-# Mount your databases.json at /config/databases.json (or point MCP_DB_CONFIG
-# elsewhere) and pass connection credentials via env if your config references
-# them.
-ENV MCP_DB_CONFIG=/config/databases.json
+# that hits a port. The directory harness invokes the binary and talks
+# JSON-RPC over stdin/stdout.
+ENV MCP_DB_CONFIG=/app/config.json
 
 ENTRYPOINT ["node", "/app/build/index.js"]

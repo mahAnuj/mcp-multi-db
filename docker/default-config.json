@@ -1,0 +1,4 @@
+{
+  "_comment": "Default config baked into the Docker image. Empty registry by design — directory smoke tests (Glama, Smithery) can boot the server without mounting a databases.json. Override MCP_DB_CONFIG to point at your real config in production deployments.",
+  "databases": []
+}

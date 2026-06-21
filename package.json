@@ -1,6 +1,6 @@
 {
   "name": "mcp-multi-db",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Read-only MCP server for PostgreSQL, MySQL, and SQLite — one server, one config, one set of tools across multiple databases.",
   "license": "ISC",
   "author": "Anuj Mahajan",
