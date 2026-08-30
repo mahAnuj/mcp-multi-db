@@ -234,6 +234,11 @@ the full checklist.
 
 The full index is in [docs/](docs/README.md).
 
+## Contributing
+
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup, the read-only invariants, and how to add a database engine.
+
 ## License
 
 ISC — see [LICENSE](LICENSE).
