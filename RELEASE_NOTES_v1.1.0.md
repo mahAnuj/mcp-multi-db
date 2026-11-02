@@ -17,16 +17,36 @@ did it run — without changing anything for existing configs.
   result column's origin as the driver reports it, so `SELECT email AS e` is
   still redacted. Computed or view columns over a table with redacted columns
   are refused.
-- **`policy.maxRows`, `timeoutMs`, `rateLimit.queriesPerMinute`** — per-database
-  budgets, which can only be stricter than the global defaults.
+- **Configurable row limits** — top-level `limits.defaultRows` / `limits.maxRows`
+  (defaults 100 / 1000, hard cap 10,000), narrowed per database with
+  `policy.defaultRows` / `policy.maxRows`. `list_databases` reports each
+  database's effective `rowLimits`.
+- **`policy.timeoutMs`, `rateLimit.queriesPerMinute`** — per-database budgets,
+  which can only be stricter than the defaults.
 - **`audit`** — one JSONL line per tool call (tool, database, SQL or its
   SHA-256, outcome, refusing rule, tables read, columns redacted, timing).
   Never result values.
 
+## Hardening (independent adversarial review, 70 attempts)
+
+- Engine errors raised mid-query are withheld on databases with redacted
+  columns: they could echo row values to the caller and the audit log.
+- A `LIMIT` must be a plain integer (hex, exponent, `offset, count` and
+  expression forms are refused), and adapters cap fetched rows themselves, so
+  no SQL form can exceed the row cap.
+- Under a table policy, system catalogs are refused unless allow-listed, and
+  `list_tables` / `describe_table` hide and refuse tables outside the policy.
+- **Stated limit:** redaction does not stop filtering or sorting by a redacted
+  column, so repeated queries can infer a value. See SECURITY.md.
+
 ## Compatibility
 
-A config with no `policy` and no `audit` behaves exactly as v1.0.2; the
-existing test suite is unchanged and passes. Config validation is strict for
+A config with no `policy`, `audit` or `limits` behaves as v1.0.2, with three
+deliberate exceptions that apply to everyone: `list_databases` now includes
+each database's `rowLimits`; a `LIMIT` in the SQL must be a plain integer
+(previously `LIMIT 0x1F4` was silently mis-clamped); and adapters cap fetched
+rows even when the SQL's only `LIMIT` is in a subquery. The existing test
+suite passes unchanged. Config validation is strict for
 the new blocks, so a misspelt control is an error rather than a silent no-op.
 
 ## Engine notes
@@ -40,7 +60,7 @@ the new blocks, so a misspelt control is an error rather than a silent no-op.
 
 ## Tests
 
-33 new tests against SQLite (always run), including the bypasses each control
+56 new tests against SQLite (always run), including the bypasses each control
 exists to stop, and a Postgres integration suite that runs when
 `MCP_TEST_POSTGRES_URL` is set — CI now provides a Postgres 16 service.
 

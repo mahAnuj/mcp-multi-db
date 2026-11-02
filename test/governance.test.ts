@@ -31,6 +31,9 @@ before(() => {
     INSERT INTO accounts (name, email, phone) VALUES ('Linus', 'linus@example.com', '555-0101');
     INSERT INTO deals (account_id, amount) VALUES (1, 500), (2, 900), (1, 50);
     INSERT INTO secrets (token) VALUES ('s3cr3t-token');
+    CREATE TABLE numbers (n INTEGER);
+    WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 3000)
+      INSERT INTO numbers SELECT x FROM c;
   `);
   seed.close();
 });
@@ -158,6 +161,92 @@ describe("column redaction, keyed on result-column origin", () => {
   });
 });
 
+describe("regressions from the adversarial review", () => {
+  it("a redacted value cannot leak through an engine error, to the caller or the audit log", async () => {
+    const path = join(dir, "audit-errors.jsonl");
+    writeFileSync(path, "");
+    const svc = service({ columns: { redact: ["accounts.email"] } }, new AuditLog({ path }));
+    for (const sql of [
+      "SELECT json_extract('{}', email) FROM accounts WHERE id = 1",
+      "SELECT json_extract('{}', email) AS j FROM accounts",
+    ]) {
+      await assert.rejects(svc.runQuery("app", sql), (err: unknown) => {
+        const message = String((err as Error).message);
+        assert.equal((err as Error).name, "QueryFailedError");
+        assert.ok(!message.includes("ada@example.com"), message);
+        return true;
+      });
+    }
+    assert.ok(!readFileSync(path, "utf8").includes("@example.com"), "audit log leaked a value");
+    // Errors from parsing/planning carry no row data and still reach the agent.
+    await assert.rejects(svc.runQuery("app", "SELECT nme FROM accounts"), /no such column/);
+    await svc.close();
+  });
+
+  it("without a redaction policy, engine errors pass through unchanged", async () => {
+    const svc = service(undefined);
+    await assert.rejects(
+      svc.runQuery("app", "SELECT json_extract('{}', email) FROM accounts WHERE id = 1"),
+      /bad JSON path/,
+    );
+    await svc.close();
+  });
+
+  for (const sql of [
+    "SELECT n FROM numbers LIMIT 0x1F4",
+    "SELECT n FROM numbers LIMIT 1e3",
+    "SELECT n FROM numbers LIMIT 0, 500",
+    "SELECT n FROM numbers LIMIT 0 , 500",
+    "SELECT n FROM numbers LIMIT (SELECT 500)",
+  ]) {
+    it(`refuses a non-plain LIMIT: ${sql}`, async () => {
+      const svc = service({ maxRows: 2 });
+      await assert.rejects(svc.runQuery("app", sql), /LIMIT must be a plain integer/);
+      await svc.close();
+    });
+  }
+
+  it("caps rows even when the only LIMIT is inside a subquery", async () => {
+    const svc = service({ maxRows: 2 });
+    const r = await svc.runQuery(
+      "app",
+      "SELECT n FROM numbers WHERE n IN (SELECT n FROM numbers LIMIT 1) UNION ALL SELECT n FROM numbers",
+    );
+    assert.equal(r.rowCount, 2);
+    assert.equal(r.truncated, true);
+    await svc.close();
+  });
+
+  it("under a deny-list, the schema catalog is refused and denied tables are not listed or described", async () => {
+    const svc = service({ tables: { deny: ["secrets"] } });
+    for (const sql of [
+      "SELECT sql FROM sqlite_master WHERE name = 'secrets'",
+      "SELECT name FROM sqlite_schema WHERE type = 'table'",
+    ]) {
+      await assert.rejects(svc.runQuery("app", sql), refusedBy("tables"), sql);
+    }
+    const names = (await svc.listTables("app")).map((t) => t.name);
+    assert.ok(!names.includes("secrets"));
+    assert.ok(names.includes("accounts"));
+    await assert.rejects(svc.describeTable("app", "secrets"), refusedBy("tables"));
+    await svc.close();
+  });
+
+  it("under an allow-list, only allowed tables are listed", async () => {
+    const svc = service({ tables: { allow: ["accounts", "deals"] } });
+    assert.deepEqual((await svc.listTables("app")).map((t) => t.name).sort(), ["accounts", "deals"]);
+    assert.equal((await svc.describeTable("app", "accounts")).length, 4);
+    await svc.close();
+  });
+
+  it("an explicitly allowed catalog can still be read", async () => {
+    const svc = service({ tables: { allow: ["accounts", "sqlite_master"] } });
+    const r = await svc.runQuery("app", "SELECT name FROM sqlite_master WHERE type = 'table'");
+    assert.ok(r.rowCount > 0);
+    await svc.close();
+  });
+});
+
 describe("budgets", () => {
   it("maxRows caps the row limit, and can only make it stricter", async () => {
     const svc = service({ maxRows: 2 });
@@ -182,6 +271,53 @@ describe("budgets", () => {
     const rl = new RateLimiter(1, () => 0);
     rl.take();
     assert.throws(() => rl.take(), /Try again in 60s/);
+  });
+});
+
+describe("row limits", () => {
+  const svcWith = (limits?: Record<string, number>, policy?: Record<string, unknown>) =>
+    new DatabaseService(
+      new DatabaseRegistry(
+        [{ id: "app", type: "sqlite", path: dbPath, ...(policy ? { policy } : {}) }],
+        limits,
+      ),
+    );
+
+  it("keeps the v1.0 defaults when nothing is configured: 100 by default, 1000 at most", async () => {
+    const svc = svcWith();
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers")).rowCount, 100);
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers", 5000)).rowCount, 1000);
+    assert.deepEqual(svc.listDatabases()[0].rowLimits, { default: 100, max: 1000 });
+    await svc.close();
+  });
+
+  it("server-wide limits raise the default and the ceiling", async () => {
+    const svc = svcWith({ defaultRows: 250, maxRows: 2500 });
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers")).rowCount, 250);
+    const big = await svc.runQuery("app", "SELECT n FROM numbers", 2000);
+    assert.equal(big.rowCount, 2000);
+    assert.equal(big.truncated, true);
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers", 9000)).rowCount, 2500);
+    // A LIMIT written in the SQL is clamped to the effective limit: the default
+    // when the call passes none (unchanged since v1.0), the ceiling at most.
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers LIMIT 2900")).rowCount, 250);
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers LIMIT 2900", 9000)).rowCount, 2500);
+    assert.deepEqual(svc.listDatabases()[0].rowLimits, { default: 250, max: 2500 });
+    await svc.close();
+  });
+
+  it("a database policy narrows the server-wide limits", async () => {
+    const svc = svcWith({ maxRows: 2500 }, { defaultRows: 20, maxRows: 300 });
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers")).rowCount, 20);
+    assert.equal((await svc.runQuery("app", "SELECT n FROM numbers", 1000)).rowCount, 300);
+    assert.deepEqual(svc.listDatabases()[0].rowLimits, { default: 20, max: 300 });
+    await svc.close();
+  });
+
+  it("never exceeds the hard cap, even if a registry is built with a larger value", async () => {
+    const svc = svcWith({ maxRows: 50_000 });
+    assert.equal(svc.listDatabases()[0].rowLimits.max, 10_000);
+    await svc.close();
   });
 });
 
@@ -262,10 +398,33 @@ describe("config validation", () => {
     assert.equal(cfg.databases[0].policy?.maxRows, 50);
   });
 
+  it("accepts raised server-wide limits and a policy within them", () => {
+    const cfg = load({
+      limits: { defaultRows: 200, maxRows: 5000 },
+      databases: [{ ...sqlite, policy: { defaultRows: 50, maxRows: 4000 } }],
+    });
+    assert.equal(cfg.limits?.maxRows, 5000);
+  });
+
+  for (const [label, config] of [
+    ["limits.maxRows above the hard cap", { limits: { maxRows: 20_000 }, databases: [] }],
+    ["limits.defaultRows above the ceiling", { limits: { defaultRows: 2000 }, databases: [] }],
+    ["an unknown limits key", { limits: { rows: 10 }, databases: [] }],
+    ["policy.maxRows above the server-wide ceiling", { databases: [{ ...sqlite, policy: { maxRows: 5000 } }] }],
+    [
+      "policy.maxRows above a raised ceiling",
+      { limits: { maxRows: 2000 }, databases: [{ ...sqlite, policy: { maxRows: 3000 } }] },
+    ],
+    ["policy.defaultRows above its maxRows", { databases: [{ ...sqlite, policy: { defaultRows: 60, maxRows: 50 } }] }],
+  ] as const) {
+    it(`rejects ${label}`, () => {
+      assert.throws(() => load(config));
+    });
+  }
+
   for (const [label, policy] of [
     ["a misspelt control", { tabels: { allow: ["x"] } }],
     ["an unknown tool", { tools: ["drop_table"] }],
-    ["maxRows above the global max", { maxRows: 5000 }],
     ["a timeout above 30s", { timeoutMs: 60_000 }],
     ["a redact entry without a table", { columns: { redact: ["email"] } }],
   ] as const) {

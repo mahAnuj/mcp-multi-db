@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import type { AppConfig, DatabaseConfig } from "./core/types.js";
-import { MAX_QUERY_LIMIT } from "./sql/validateReadOnly.js";
+import { HARD_MAX_ROWS, effectiveRowLimits } from "./sql/rowLimits.js";
 
 const MAX_TIMEOUT_MS = 30_000;
 
@@ -29,7 +29,8 @@ const policySchema = z
       })
       .strict()
       .optional(),
-    maxRows: z.number().int().positive().max(MAX_QUERY_LIMIT).optional(),
+    maxRows: z.number().int().positive().max(HARD_MAX_ROWS).optional(),
+    defaultRows: z.number().int().positive().max(HARD_MAX_ROWS).optional(),
     timeoutMs: z.number().int().positive().max(MAX_TIMEOUT_MS).optional(),
     rateLimit: z.object({ queriesPerMinute: z.number().int().positive() }).strict().optional(),
   })
@@ -41,6 +42,13 @@ const baseFields = {
   description: z.string().optional(),
   policy: policySchema.optional(),
 };
+
+const limitsSchema = z
+  .object({
+    defaultRows: z.number().int().positive().max(HARD_MAX_ROWS).optional(),
+    maxRows: z.number().int().positive().max(HARD_MAX_ROWS).optional(),
+  })
+  .strict();
 
 const auditSchema = z
   .object({
@@ -73,6 +81,7 @@ const databaseSchema = z.discriminatedUnion("type", [
 const configFileSchema = z.object({
   databases: z.array(databaseSchema),
   audit: auditSchema.optional(),
+  limits: limitsSchema.optional(),
 });
 
 const databasesArraySchema = z.array(databaseSchema);
@@ -98,6 +107,33 @@ function parseRawConfig(raw: unknown): AppConfig {
     .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
     .join("; ");
   throw new Error(`Config must be { databases: [...] } or a databases array. ${issues}`);
+}
+
+function checkLimits(config: AppConfig): void {
+  const global = config.limits ?? {};
+  const globalMax = global.maxRows ?? effectiveRowLimits(undefined).maxRows;
+  if (global.defaultRows !== undefined && global.defaultRows > globalMax) {
+    throw new Error(
+      `limits.defaultRows (${global.defaultRows}) is larger than the row ceiling (${globalMax}).`,
+    );
+  }
+  for (const db of config.databases) {
+    const p = db.policy;
+    if (!p) continue;
+    // A policy can only tighten the server-wide ceiling, never widen it.
+    if (p.maxRows !== undefined && p.maxRows > globalMax) {
+      throw new Error(
+        `Database "${db.id}": policy.maxRows (${p.maxRows}) is larger than the server-wide ` +
+          `ceiling (${globalMax}). Raise limits.maxRows first.`,
+      );
+    }
+    const dbMax = p.maxRows ?? globalMax;
+    if (p.defaultRows !== undefined && p.defaultRows > dbMax) {
+      throw new Error(
+        `Database "${db.id}": policy.defaultRows (${p.defaultRows}) is larger than its row ceiling (${dbMax}).`,
+      );
+    }
+  }
 }
 
 function checkPolicies(databases: DatabaseConfig[]): void {
@@ -191,6 +227,7 @@ export function loadConfig(): AppConfig {
     ids.add(db.id);
   }
   checkPolicies(databases);
+  checkLimits(config);
 
   return config;
 }

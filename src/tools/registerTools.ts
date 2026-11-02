@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { DatabaseService } from "../services/databaseService.js";
+import { HARD_MAX_ROWS } from "../sql/validateReadOnly.js";
 
 export function registerTools(server: McpServer, service: DatabaseService): void {
   server.registerTool(
@@ -86,9 +87,11 @@ export function registerTools(server: McpServer, service: DatabaseService): void
           .number()
           .int()
           .positive()
-          .max(1000)
+          .max(HARD_MAX_ROWS)
           .optional()
-          .describe("Max rows to return (default 100, max 1000)"),
+          .describe(
+            "Max rows to return. Defaults to 100 with a ceiling of 1000 unless configured; each database's effective default and ceiling are in list_databases (rowLimits). Larger values are clamped to the ceiling.",
+          ),
       },
     },
     async ({ database_id, sql, limit }) => {

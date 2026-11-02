@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   clampQueryLimit,
   DEFAULT_QUERY_LIMIT,
+  HARD_MAX_ROWS,
   MAX_QUERY_LIMIT,
   validateReadOnlySql,
 } from "../build/sql/validateReadOnly.js";
@@ -27,6 +28,16 @@ describe("clampQueryLimit", () => {
 
   it("floors fractional limits", () => {
     assert.equal(clampQueryLimit(12.9), 12);
+  });
+
+  it("uses configured bounds", () => {
+    assert.equal(clampQueryLimit(undefined, { defaultRows: 250, maxRows: 2500 }), 250);
+    assert.equal(clampQueryLimit(4000, { defaultRows: 250, maxRows: 2500 }), 2500);
+  });
+
+  it("never returns a default above the ceiling, or anything above the hard cap", () => {
+    assert.equal(clampQueryLimit(undefined, { defaultRows: 500, maxRows: 100 }), 100);
+    assert.equal(clampQueryLimit(1e9, { defaultRows: 1, maxRows: 1e9 }), HARD_MAX_ROWS);
   });
 });
 

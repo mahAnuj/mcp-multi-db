@@ -17,12 +17,25 @@ import {
   hasTablePolicy,
   planRedaction,
   redactPatterns,
+  relationAllowed,
   toolAllowed,
 } from "../governance/policy.js";
 import {
   clampQueryLimit,
   validateReadOnlySql,
 } from "../sql/validateReadOnly.js";
+
+/** A failed query whose engine error text was withheld; see runQuery. */
+export class QueryFailedError extends Error {
+  constructor() {
+    super(
+      "The query failed while running. The database's error text is withheld because this " +
+        "database has redacted columns and engine errors can echo row values. Check that every " +
+        "function receives arguments of the type it expects.",
+    );
+    this.name = "QueryFailedError";
+  }
+}
 
 export interface DatabaseServiceOptions {
   audit?: AuditLog;
@@ -49,7 +62,12 @@ export class DatabaseService {
     return this.audited({ tool: "list_tables", database_id: databaseId }, async () => {
       this.requireTool(databaseId, "list_tables");
       const adapter = await this.getSqlAdapter(databaseId);
-      return adapter.listTables(schema);
+      const tables = await adapter.listTables(schema);
+      // Under a table policy, tables the agent may not read are not listed:
+      // their names and shapes are part of what the policy withholds.
+      const policy = this.registry.getPolicy(databaseId);
+      if (!hasTablePolicy(policy)) return tables;
+      return tables.filter((t) => relationAllowed(policy, qualify(adapter.type, t.name, t.schema)));
     });
   }
 
@@ -61,6 +79,10 @@ export class DatabaseService {
     return this.audited({ tool: "describe_table", database_id: databaseId }, async () => {
       this.requireTool(databaseId, "describe_table");
       const adapter = await this.getSqlAdapter(databaseId);
+      const policy = this.registry.getPolicy(databaseId);
+      if (hasTablePolicy(policy) && !relationAllowed(policy, qualify(adapter.type, table, schema))) {
+        throw new PolicyError("tables", `Table "${table}" is outside this database's table policy.`);
+      }
       return adapter.describeTable(table, schema);
     });
   }
@@ -75,8 +97,7 @@ export class DatabaseService {
       const policy = this.registry.getPolicy(databaseId);
       const adapter = await this.getSqlAdapter(databaseId);
 
-      const clamped = clampQueryLimit(limit);
-      const effectiveLimit = policy?.maxRows ? Math.min(clamped, policy.maxRows) : clamped;
+      const effectiveLimit = clampQueryLimit(limit, this.registry.rowLimits(databaseId));
       const safeSql = validateReadOnlySql(sql, effectiveLimit);
 
       const tablesGoverned = hasTablePolicy(policy);
@@ -108,7 +129,31 @@ export class DatabaseService {
         ...(patterns.length > 0 ? { withOrigins: true } : {}),
       };
 
-      const outcome = await adapter.executeReadQuery(safeSql, effectiveLimit, readOptions);
+      // An engine error raised WHILE the query runs can carry row values in its
+      // text (SQLite: json_extract('{}', email) -> "bad JSON path: '<email>'"),
+      // and it is thrown before redaction can see a result. So on a database
+      // with redacted columns, execution-time errors are replaced with a
+      // generic message, for the caller and the audit log alike. Errors from
+      // parsing and planning (before onPlan returns) carry no row data and pass
+      // through, so the agent can still fix a typo. MySQL never plans, so every
+      // error there is treated as execution-time.
+      let planned = false;
+      if (readOptions.onPlan) {
+        const check = readOptions.onPlan;
+        readOptions.onPlan = (relations) => {
+          check(relations);
+          planned = true;
+        };
+      }
+      let outcome;
+      try {
+        outcome = await adapter.executeReadQuery(safeSql, effectiveLimit, readOptions);
+      } catch (err) {
+        if (patterns.length > 0 && !(err instanceof PolicyError) && (planned || !needsPlan)) {
+          throw new QueryFailedError();
+        }
+        throw err;
+      }
       if (outcome.relations) entry.tables = outcome.relations;
 
       const { origins, relations, ...result } = outcome;
@@ -203,4 +248,10 @@ export class DatabaseService {
     }
     return adapter;
   }
+}
+
+/** Qualify a table the way the adapter's plan names it: "schema.table" except on SQLite. */
+function qualify(type: string, table: string, schema?: string): string {
+  if (type === "sqlite") return table;
+  return `${schema ?? (type === "postgres" ? "public" : "")}.${table}`.replace(/^\./, "");
 }

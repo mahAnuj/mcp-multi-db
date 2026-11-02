@@ -78,7 +78,13 @@ export class SqliteAdapter implements SqlDatabasePort {
     }
 
     const statement = this.db.prepare(sql);
-    const rows = statement.all() as Record<string, unknown>[];
+    // Stop at `limit` rows whatever the SQL says: the row cap must not depend
+    // on the LIMIT clause the text guard rewrote being the only one that counts.
+    const rows: Record<string, unknown>[] = [];
+    for (const row of statement.iterate() as IterableIterator<Record<string, unknown>>) {
+      if (rows.length >= limit) break;
+      rows.push(row);
+    }
     const meta = statement.columns();
     const columns = rows.length > 0 ? Object.keys(rows[0]) : meta.map((column) => column.name);
 

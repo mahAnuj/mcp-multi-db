@@ -57,20 +57,50 @@ export function redactPatterns(policy: DatabasePolicy | undefined): string[] {
   return policy?.columns?.redact ?? [];
 }
 
+/**
+ * The system catalogs describe every table, including ones a policy denies,
+ * so under any table policy they are readable only if the allow-list names
+ * them explicitly. Use list_tables / describe_table, which apply the policy.
+ */
+export function isCatalog(rel: string): boolean {
+  const r = rel.toLowerCase();
+  return (
+    r === "sqlite_master" ||
+    r === "sqlite_schema" ||
+    r === "sqlite_temp_master" ||
+    r.startsWith("pg_catalog.") ||
+    r.startsWith("information_schema.") ||
+    r.startsWith("mysql.") ||
+    r.startsWith("performance_schema.")
+  );
+}
+
+/** Why a relation is outside the table policy, or null when it may be read. */
+function relationRefusal(policy: DatabasePolicy | undefined, rel: string): string | null {
+  const tables = policy?.tables;
+  if (!tables) return null;
+  const allowed = tables.allow?.some((p) => nameMatches(p, rel)) ?? false;
+  if (isCatalog(rel) && !allowed) {
+    return `Query reads the system catalog "${rel}", which a table policy withholds. Use list_tables or describe_table.`;
+  }
+  if (tables.allow && !allowed) {
+    return `Query reads "${rel}", which is not in this database's table allow-list.`;
+  }
+  if (tables.deny && tables.deny.some((p) => nameMatches(p, rel))) {
+    return `Query reads "${rel}", which this database's policy denies.`;
+  }
+  return null;
+}
+
+export function relationAllowed(policy: DatabasePolicy | undefined, rel: string): boolean {
+  return relationRefusal(policy, rel) === null;
+}
+
 /** Throw if any relation the plan reads falls outside the table policy. */
 export function checkRelations(policy: DatabasePolicy | undefined, relations: string[]): void {
-  const tables = policy?.tables;
-  if (!tables) return;
   for (const rel of relations) {
-    if (tables.allow && !tables.allow.some((p) => nameMatches(p, rel))) {
-      throw new PolicyError(
-        "tables",
-        `Query reads "${rel}", which is not in this database's table allow-list.`,
-      );
-    }
-    if (tables.deny && tables.deny.some((p) => nameMatches(p, rel))) {
-      throw new PolicyError("tables", `Query reads "${rel}", which this database's policy denies.`);
-    }
+    const reason = relationRefusal(policy, rel);
+    if (reason) throw new PolicyError("tables", reason);
   }
 }
 

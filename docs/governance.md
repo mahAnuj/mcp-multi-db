@@ -153,6 +153,22 @@ When `audit.path` is set, every tool call appends one JSON line:
   log that can take the server down becomes a denial-of-service lever); an
   `audit.required: true` flag inverts that for operators who want fail-closed.
 
+### Hardening from an adversarial review
+
+Before release, an independent attack pass made 70 attempts against the
+SQLite build. The table policy and origin-based redaction held against every
+hiding trick (views, CTEs, UNION, quoted and case-varied names, `main.`
+prefixes, duplicate column names, NATURAL JOIN, virtual tables). It found two
+real bypasses and two leaks, now fixed or stated, each with a regression test
+built from the attacker's query:
+
+| Finding | Fix |
+|---------|-----|
+| Redacted values leaked verbatim through engine errors raised mid-query (`json_extract('{}', email)` → `bad JSON path: '<email>'`), to the caller and the audit log | On a database with redacted columns, execution-time errors are replaced with a generic message; parse/plan errors still pass |
+| `LIMIT 0x1F4`, `LIMIT 1e3`, `LIMIT 0, 500` and subquery-only limits escaped the row cap | `LIMIT` must be a plain integer; adapters stop fetching at the cap regardless of the SQL |
+| Under a deny-list, `sqlite_master` (and `list_tables` / `describe_table`, and Postgres catalogs) exposed denied tables' names and DDL | Catalogs are refused under any table policy unless allow-listed; schema tools filter by the policy |
+| Filtering, grouping or sorting by a redacted column lets repeated queries infer its value | **Stated limit**, not fixed: redaction protects values in results. Remove the column from the user's view where inference matters, and rate-limit |
+
 ### Where it sits
 
 ```mermaid

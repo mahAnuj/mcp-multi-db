@@ -199,7 +199,9 @@ function toQueryResult(
   rows: Record<string, unknown>[],
   limit: number,
 ): ReadQueryOutcome {
-  const normalizedRows = rows.map((row) => ({ ...row }));
+  // Cap fetched rows at `limit` whatever the SQL said (a subquery's LIMIT, an
+  // unusual literal): the SQL LIMIT is an optimisation, this is the guarantee.
+  const normalizedRows = rows.slice(0, limit).map((row) => ({ ...row }));
   return {
     columns,
     rows: normalizedRows,

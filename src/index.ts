@@ -9,7 +9,7 @@ import { registerTools } from "./tools/registerTools.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const registry = new DatabaseRegistry(config.databases);
+  const registry = new DatabaseRegistry(config.databases, config.limits);
   const service = new DatabaseService(registry, {
     ...(config.audit ? { audit: new AuditLog(config.audit) } : {}),
   });

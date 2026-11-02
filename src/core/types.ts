@@ -14,8 +14,10 @@ export interface DatabasePolicy {
   tables?: { allow?: string[]; deny?: string[] };
   /** `[schema.]table.column` values replaced with "[redacted]" in results. */
   columns?: { redact?: string[] };
-  /** Per-database row cap; can only be stricter than the global maximum. */
+  /** Per-database row ceiling; can only be stricter than the server-wide ceiling. */
   maxRows?: number;
+  /** Per-database default rows when the caller gives no `limit`; at most `maxRows`. */
+  defaultRows?: number;
   /** Per-database statement timeout in ms; can only be stricter than 30s. */
   timeoutMs?: number;
   /** Token-bucket budget for run_query calls on this database. */
@@ -38,9 +40,17 @@ export interface AuditConfig {
   required?: boolean;
 }
 
+/** Server-wide row limits. Omitted fields keep the v1.0 values (100 / 1000). */
+export interface LimitsConfig {
+  defaultRows?: number;
+  /** At most 10,000 (HARD_MAX_ROWS). */
+  maxRows?: number;
+}
+
 export interface AppConfig {
   databases: DatabaseConfig[];
   audit?: AuditConfig;
+  limits?: LimitsConfig;
 }
 
 export interface PostgresConfig extends DatabaseConfigBase {
@@ -65,10 +75,11 @@ export interface DatabaseSummary {
   type: DatabaseType;
   label?: string;
   description?: string;
+  /** Effective rows per query for this database: the default and the ceiling. */
+  rowLimits: { default: number; max: number };
   /** Present only when a policy is set, so the agent knows its scope up front. */
   policy?: {
     tools: ScopedToolName[];
-    maxRows?: number;
     tablesRestricted: boolean;
     redactedColumns: string[];
   };
