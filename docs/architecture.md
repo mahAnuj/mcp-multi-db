@@ -60,6 +60,7 @@ flowchart TD
 | **Config loader** | [`src/config.ts`](../src/config.ts) | Reads and validates the database list (Zod). Resolves `MCP_DB_CONFIG` (a file path) or `MCP_DATABASES` (inline JSON); enforces unique ids. |
 | **Tool layer** | [`src/tools/registerTools.ts`](../src/tools/registerTools.ts) | Declares the 4 MCP tools and their Zod input schemas. Each tool is a thin wrapper: call the service, JSON-stringify the result into a text content block. |
 | **Service** | [`src/services/databaseService.ts`](../src/services/databaseService.ts) | Orchestration. Resolves an adapter, **narrows it to the right family** (`getSqlAdapter`), runs the read-only guard, and dispatches to the adapter. The only place the SQL guard runs. |
+| **Governance (opt-in)** | [`src/governance/`](../src/governance/) | `policy.ts`: tool scope, table allow/deny matching, column redaction and the computed-column refusal, rate limiting, `PolicyError`. `audit.ts`: one JSONL line per tool call. Applied by the service; a database with no policy skips all of it. See [governance.md](governance.md). |
 | **Read-only guard** | [`src/sql/validateReadOnly.ts`](../src/sql/validateReadOnly.ts) | Pure functions: allow/deny SQL by text, reject multiple statements, inject/clamp `LIMIT`. |
 | **Registry** | [`src/adapters/registry.ts`](../src/adapters/registry.ts) | Maps `database_id` → adapter instance. Lazily constructs adapters (and their connection pools) on first use and **caches** them; closes them all on shutdown. |
 | **Adapters** | [`src/adapters/{postgres,mysql,sqlite}.ts`](../src/adapters/) | Per-engine implementations of `SqlDatabasePort`: introspection (tables/columns) and read query execution, each enforcing read-only at the connection level. |
@@ -104,6 +105,14 @@ sequenceDiagram
     S-->>T: QueryResult
     T-->>C: JSON text content
 ```
+
+When a database has a `policy`, `run_query` adds three steps to this path:
+the service checks tool scope and the rate budget first; the adapter runs the
+engine's plan **inside the same read-only transaction, before the query**, and
+hands the relations it reads to the table check (`onPlan`), which can abort the
+query; and after execution the adapter reports each result column's origin, so
+the service can redact by origin and refuse untraceable columns. One audit line
+is written per call. See [governance.md](governance.md).
 
 The schema-introspection tools (`list_tables`, `describe_table`) follow the same
 shape but skip the guard — they call fixed introspection queries the adapter

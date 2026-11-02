@@ -24,6 +24,31 @@ Enforcement is two-layered:
 A string-based filter alone is not a security boundary. Layer 2 is what makes
 the read-only guarantee real.
 
+## Optional governance controls
+
+Since v1.1.0 a database can carry a `policy`, and the config an `audit` block
+(see the README's Governance section and [docs/governance.md](docs/governance.md)).
+They add controls a database grant cannot express, each enforced in code
+below the prompt:
+
+- **Tool scope** — e.g. schema-only access for a database.
+- **Table allow/deny-list** — checked against the engine's query plan before
+  the query runs (Postgres `EXPLAIN (FORMAT JSON, VERBOSE)`, SQLite bytecode).
+  Anything the plan cannot account for — a function scan, a virtual table, an
+  attached database — is refused. Not supported on MySQL, whose plan reports
+  aliases; use grants there.
+- **Column redaction** — keyed on each result column's origin from the
+  driver, so aliasing does not bypass it; a computed or view column over a
+  table with redacted columns is refused.
+- **Budgets** — per-database row cap, statement timeout and query rate.
+- **Audit log** — one JSONL line per call; result values are never logged.
+
+**Known limits.** A function that reads other tables inside its body is not
+visible in a query plan, so a table policy cannot see what it reads; the
+`SELECT`-only user below is what bounds that case. SQLite cannot time out a
+running query. Redaction protects result values, not the fact that a row
+exists.
+
 ## Recommendations for operators
 
 - **Use a dedicated read-only database user** with `GRANT SELECT` only. This is

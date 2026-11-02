@@ -20,6 +20,10 @@ safe to point at real data.
 - **Read-only & safe by default** — two-layer enforcement (SQL-text guard +
   database-level read-only transactions) plus row limits and query timeouts.
   See [SECURITY.md](SECURITY.md).
+- **Governed when you need it (opt-in)** — per-database tool scope, a table
+  allow/deny-list checked against the engine's own query plan, column redaction
+  that survives aliasing, row/time/rate budgets, and a JSONL audit log. See
+  [Governance](#governance-opt-in).
 - **Schema-aware** — the agent can discover databases, tables/views, and column
   metadata before it writes a query.
 - **Zero query language to learn** — just ask in natural language.
@@ -168,6 +172,56 @@ The JSON may be either `{ "databases": [ ... ] }` or a bare array. Each entry:
 | `path` | sqlite | Absolute path to the `.db` file |
 | `label` | no | Human-friendly name shown to the agent |
 | `description` | no | Extra context shown to the agent |
+| `policy` | no | Opt-in governance for this database — see [Governance](#governance-opt-in) |
+
+The object form also accepts a top-level `audit` block — see below.
+
+## Governance (opt-in)
+
+Read-only answers *can the agent change data?* A policy answers the next
+questions: what may it read, may it see personal data, and what did it run.
+A database with no `policy`, and a config with no `audit`, behave exactly as
+before.
+
+```json
+{
+  "audit": { "path": "/var/log/mcp-multi-db/audit.jsonl", "sql": "full" },
+  "databases": [
+    {
+      "id": "crm",
+      "type": "postgres",
+      "connectionString": "postgresql://readonly@replica:5432/crm",
+      "policy": {
+        "tools": ["list_tables", "describe_table", "run_query"],
+        "tables": { "allow": ["public.accounts", "public.deals"] },
+        "columns": { "redact": ["public.accounts.email", "public.accounts.phone"] },
+        "maxRows": 200,
+        "timeoutMs": 10000,
+        "rateLimit": { "queriesPerMinute": 30 }
+      }
+    }
+  ]
+}
+```
+
+| Control | What it does | How it is enforced |
+|---------|--------------|--------------------|
+| `tools` | Tools exposed for this database. Leave out `run_query` for schema-only access. | Checked before any database call. |
+| `tables.allow` / `tables.deny` | Relations a query may read. Names match case-insensitively on trailing segments (`accounts` matches `public.accounts`). | From the engine's **query plan**, inside the read-only transaction, before the query runs — so aliases, CTEs, subqueries and views cannot hide a table. Postgres and SQLite only; see below. |
+| `columns.redact` | `[schema.]table.column` values become `"[redacted]"`. | From each result column's **origin** as the driver reports it, so `SELECT email AS e` is still redacted. A computed or view column over a table with redacted columns is refused. |
+| `maxRows` | Row cap (≤ 1000). | Stricter of this and the request's `limit`. |
+| `timeoutMs` | Statement timeout (≤ 30000). | Postgres `statement_timeout`, MySQL `MAX_EXECUTION_TIME`. Not available for SQLite. |
+| `rateLimit.queriesPerMinute` | `run_query` budget. | Token bucket per database; the refusal says when to retry. |
+| `audit` (top level) | One JSON line per tool call: tool, database, SQL (or `"sql": "hash"` for its SHA-256), outcome, the rule that refused, tables read, columns redacted, timing. **Never result values.** | Written before the response. A failed write warns on stderr; `"required": true` makes it fail the call instead. |
+
+**Engine notes.** MySQL's query plan reports table *aliases*, so a `tables`
+policy on MySQL is rejected at startup — restrict tables with MySQL grants.
+Redaction on MySQL matches the column *name* in any table, which can
+over-redact but never under-redacts. Under a table or column policy, `EXPLAIN`
+and (on Postgres) function scans are refused, because neither can be checked.
+A function that reads another table inside its body does not appear in a plan;
+the read-only database user is what bounds that. Full design and limits:
+[docs/governance.md](docs/governance.md).
 
 ## Example prompts
 
@@ -184,6 +238,9 @@ The JSON may be either `{ "databases": [ ... ] }` or a bare array. Each entry:
   side-effecting function is still refused.
 - **Row limits.** Results are capped (default 100, max 1000).
 - **Query timeouts.** Statements are bounded (30s) to avoid runaway queries.
+- **Optional governance.** Per-database tool scope, plan-checked table
+  policy, alias-proof column redaction, budgets and an audit log — see
+  [Governance](#governance-opt-in).
 - **Use least privilege anyway.** Prefer dedicated read-only DB users and read
   replicas. Full details and reporting in [SECURITY.md](SECURITY.md).
 

@@ -7,7 +7,7 @@ export function registerTools(server: McpServer, service: DatabaseService): void
     "list_databases",
     {
       description:
-        "List all configured database connections (id, type, label, description). Call this first to discover which database_id to use.",
+        "List all configured database connections (id, type, label, description, and policy when one is set: which tools are enabled, row cap, whether tables are restricted, which columns are redacted). Call this first to discover which database_id to use.",
       inputSchema: {},
     },
     async () => {
@@ -78,7 +78,7 @@ export function registerTools(server: McpServer, service: DatabaseService): void
     "run_query",
     {
       description:
-        "Execute a read-only SQL query (SELECT, WITH, EXPLAIN) on a configured database. Writes are blocked.",
+        "Execute a read-only SQL query (SELECT, WITH, EXPLAIN) on a configured database. Writes are blocked. If the database has a policy, queries reading tables outside it are refused with the reason, and redacted columns come back as \"[redacted]\" (listed in `redacted`).",
       inputSchema: {
         database_id: z.string().describe("Database id from list_databases"),
         sql: z.string().describe("Read-only SQL query"),

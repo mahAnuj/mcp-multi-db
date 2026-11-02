@@ -1,6 +1,7 @@
 # Governance: a design proposal
 
-**Status: proposal, not implemented.** This document describes the controls
+**Status: Phase 1 implemented in v1.1.0** (on Postgres and SQLite; MySQL as
+noted below). Phase 2 is still a proposal. This document describes the controls
 that would turn `mcp-multi-db` from a read-only query server into a *governed*
 gateway: the agent sees only what its policy allows, sensitive values never
 reach the model, and every call leaves an audit record. Nothing here changes
@@ -85,6 +86,14 @@ The plan runs inside the same read-only transaction as the query. If any
 relation in the plan is outside the policy, or the plan cannot be read, the
 query is refused before it executes.
 
+**As built.** MySQL's plan reports aliases rather than table names, so a
+`tables` policy on MySQL is rejected at config load instead of enforced
+unreliably. On Postgres a *function scan* in the plan is refused under a table
+policy, since a function can read anything; on SQLite so is a virtual table
+(including table-valued functions such as `pragma_table_info`) and any read of
+an attached or temp database. `EXPLAIN` statements are refused under any table
+or column policy.
+
 **Stated limits.** Views are expanded to their base tables in PostgreSQL and
 SQLite plans, so an allow-list names base tables (or the operator grants the
 view to a role and relies on the grant). A function that reads another table
@@ -103,6 +112,12 @@ driver reports, so `SELECT email AS e` is still redacted:
 | PostgreSQL | `FieldDef.tableID` + `columnID`, resolved via `pg_attribute` (cached) |
 | MySQL | `FieldPacket.orgTable` + `orgName` |
 | SQLite | `Statement.columns()` → `table` + `column` |
+
+**As built.** A column is *unverifiable* when it has no origin (computed) or
+its origin is not a base table the plan read (a Postgres view column names the
+view). On MySQL, with no reliable plan, redaction matches the column *name* in
+any table, and an untraceable column is refused if the SQL mentions a redacted
+column name.
 
 **The gap, and how it closes.** A computed column (`lower(email)`,
 `email || ''`) has no origin. So when a result contains a column with no

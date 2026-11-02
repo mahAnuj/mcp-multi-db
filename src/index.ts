@@ -2,18 +2,21 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { DatabaseRegistry } from "./adapters/registry.js";
-import { loadDatabaseConfig } from "./config.js";
+import { loadConfig } from "./config.js";
+import { AuditLog } from "./governance/audit.js";
 import { DatabaseService } from "./services/databaseService.js";
 import { registerTools } from "./tools/registerTools.js";
 
 async function main(): Promise<void> {
-  const configs = loadDatabaseConfig();
-  const registry = new DatabaseRegistry(configs);
-  const service = new DatabaseService(registry);
+  const config = loadConfig();
+  const registry = new DatabaseRegistry(config.databases);
+  const service = new DatabaseService(registry, {
+    ...(config.audit ? { audit: new AuditLog(config.audit) } : {}),
+  });
 
   const server = new McpServer({
     name: "mcp-multi-db",
-    version: "1.0.2",
+    version: "1.1.0",
   });
 
   registerTools(server, service);
