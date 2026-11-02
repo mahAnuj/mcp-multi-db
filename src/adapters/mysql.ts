@@ -1,6 +1,12 @@
 import mysql from "mysql2/promise";
 import type { SqlDatabasePort } from "../core/sqlDatabasePort.js";
-import type { ColumnInfo, QueryResult, TableInfo } from "../core/types.js";
+import type {
+  ColumnInfo,
+  ColumnOrigin,
+  ReadQueryOptions,
+  ReadQueryOutcome,
+  TableInfo,
+} from "../core/types.js";
 
 const QUERY_TIMEOUT_MS = 30_000;
 
@@ -77,10 +83,19 @@ export class MysqlAdapter implements SqlDatabasePort {
     }));
   }
 
-  async executeReadQuery(sql: string, limit: number): Promise<QueryResult> {
+  async executeReadQuery(
+    sql: string,
+    limit: number,
+    options: ReadQueryOptions = {},
+  ): Promise<ReadQueryOutcome> {
+    if (options.onPlan) {
+      // Config load refuses a MySQL table policy; this guards the invariant.
+      throw new Error("Table policies are not supported for MySQL.");
+    }
+    const timeoutMs = Math.min(options.timeoutMs ?? QUERY_TIMEOUT_MS, QUERY_TIMEOUT_MS);
     const connection = await this.pool.getConnection();
     try {
-      await connection.query(`SET SESSION MAX_EXECUTION_TIME = ${QUERY_TIMEOUT_MS}`);
+      await connection.query(`SET SESSION MAX_EXECUTION_TIME = ${Math.floor(timeoutMs)}`);
       // Run inside a read-only transaction so the database itself rejects any
       // write, even one the SQL-text guard cannot detect (e.g. a SELECT calling
       // a stored function with side effects). ROLLBACK discards any state.
@@ -88,10 +103,18 @@ export class MysqlAdapter implements SqlDatabasePort {
       try {
         const [rows, fields] = await connection.query(sql);
         const resultRows = Array.isArray(rows) ? (rows as mysql.RowDataPacket[]) : [];
-        const columns = Array.isArray(fields)
-          ? fields.map((field) => field.name)
+        const fieldList = Array.isArray(fields) ? fields : [];
+        const columns = fieldList.length > 0
+          ? fieldList.map((field) => field.name)
           : Object.keys(resultRows[0] ?? {});
-        return toQueryResult(columns, resultRows, limit);
+        const outcome: ReadQueryOutcome = toQueryResult(columns, resultRows, limit);
+        if (options.withOrigins) {
+          // orgTable/orgName survive aliasing. A computed column has neither.
+          outcome.origins = fieldList.map((f): ColumnOrigin | null =>
+            f.orgTable && f.orgName ? { table: `${f.db}.${f.orgTable}`, column: f.orgName } : null,
+          );
+        }
+        return outcome;
       } finally {
         await connection.query("ROLLBACK");
       }
@@ -120,8 +143,10 @@ function toQueryResult(
   columns: string[],
   rows: mysql.RowDataPacket[],
   limit: number,
-): QueryResult {
-  const normalizedRows = rows.map((row) => ({ ...row }));
+): ReadQueryOutcome {
+  // Cap fetched rows at `limit` whatever the SQL said (a subquery's LIMIT, an
+  // unusual literal): the SQL LIMIT is an optimisation, this is the guarantee.
+  const normalizedRows = rows.slice(0, limit).map((row) => ({ ...row }));
   return {
     columns,
     rows: normalizedRows,

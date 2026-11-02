@@ -1,13 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { DatabaseService } from "../services/databaseService.js";
+import { HARD_MAX_ROWS } from "../sql/validateReadOnly.js";
 
 export function registerTools(server: McpServer, service: DatabaseService): void {
   server.registerTool(
     "list_databases",
     {
       description:
-        "List all configured database connections (id, type, label, description). Call this first to discover which database_id to use.",
+        "List all configured database connections (id, type, label, description, and policy when one is set: which tools are enabled, row cap, whether tables are restricted, which columns are redacted). Call this first to discover which database_id to use.",
       inputSchema: {},
     },
     async () => {
@@ -78,7 +79,7 @@ export function registerTools(server: McpServer, service: DatabaseService): void
     "run_query",
     {
       description:
-        "Execute a read-only SQL query (SELECT, WITH, EXPLAIN) on a configured database. Writes are blocked.",
+        "Execute a read-only SQL query (SELECT, WITH, EXPLAIN) on a configured database. Writes are blocked. If the database has a policy, queries reading tables outside it are refused with the reason, and redacted columns come back as \"[redacted]\" (listed in `redacted`).",
       inputSchema: {
         database_id: z.string().describe("Database id from list_databases"),
         sql: z.string().describe("Read-only SQL query"),
@@ -86,9 +87,11 @@ export function registerTools(server: McpServer, service: DatabaseService): void
           .number()
           .int()
           .positive()
-          .max(1000)
+          .max(HARD_MAX_ROWS)
           .optional()
-          .describe("Max rows to return (default 100, max 1000)"),
+          .describe(
+            "Max rows to return. Defaults to 100 with a ceiling of 1000 unless configured; each database's effective default and ceiling are in list_databases (rowLimits). Larger values are clamped to the ceiling.",
+          ),
       },
     },
     async ({ database_id, sql, limit }) => {

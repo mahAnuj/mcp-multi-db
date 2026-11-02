@@ -1,5 +1,8 @@
 import type { AnyDatabasePort } from "../core/databasePort.js";
-import type { DatabaseConfig, DatabaseSummary } from "../core/types.js";
+import type { DatabaseConfig, DatabasePolicy, DatabaseSummary, LimitsConfig } from "../core/types.js";
+import { effectiveRowLimits } from "../sql/rowLimits.js";
+import type { RowLimits } from "../sql/validateReadOnly.js";
+import { ALL_SCOPED_TOOLS, hasTablePolicy, redactPatterns } from "../governance/policy.js";
 import { MysqlAdapter } from "./mysql.js";
 import { PostgresAdapter } from "./postgres.js";
 import { SqliteAdapter } from "./sqlite.js";
@@ -8,17 +11,43 @@ export class DatabaseRegistry {
   private readonly configs: DatabaseConfig[];
   private readonly adapters = new Map<string, AnyDatabasePort>();
 
-  constructor(configs: DatabaseConfig[]) {
+  constructor(
+    configs: DatabaseConfig[],
+    private readonly limits?: LimitsConfig,
+  ) {
     this.configs = configs;
   }
 
+  /** Effective rows-per-query bounds for a database (default / ceiling). */
+  rowLimits(databaseId: string): RowLimits {
+    return effectiveRowLimits(this.limits, this.getPolicy(databaseId));
+  }
+
   listDatabases(): DatabaseSummary[] {
-    return this.configs.map((config) => ({
+    return this.configs.map((config) => {
+      const rows = effectiveRowLimits(this.limits, config.policy);
+      return {
       id: config.id,
       type: config.type,
       label: config.label,
       description: config.description,
-    }));
+      rowLimits: { default: rows.defaultRows, max: rows.maxRows },
+      ...(config.policy
+        ? {
+            policy: {
+              tools: config.policy.tools ?? ALL_SCOPED_TOOLS,
+              tablesRestricted: hasTablePolicy(config.policy),
+              redactedColumns: redactPatterns(config.policy),
+            },
+          }
+        : {}),
+      };
+    });
+  }
+
+  /** The policy for a database, or undefined. Unknown ids resolve via getAdapter's error. */
+  getPolicy(databaseId: string): DatabasePolicy | undefined {
+    return this.configs.find((entry) => entry.id === databaseId)?.policy;
   }
 
   async getAdapter(databaseId: string): Promise<AnyDatabasePort> {

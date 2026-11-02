@@ -1,21 +1,74 @@
 import type { DatabaseRegistry } from "../adapters/registry.js";
 import type { SqlDatabasePort } from "../core/sqlDatabasePort.js";
-import type { ColumnInfo, DatabaseSummary, QueryResult, TableInfo } from "../core/types.js";
+import type {
+  ColumnInfo,
+  DatabaseSummary,
+  QueryResult,
+  ReadQueryOptions,
+  ScopedToolName,
+  TableInfo,
+} from "../core/types.js";
+import type { AuditEntry, AuditLog } from "../governance/audit.js";
+import {
+  PolicyError,
+  RateLimiter,
+  applyRedaction,
+  checkRelations,
+  hasTablePolicy,
+  planRedaction,
+  redactPatterns,
+  relationAllowed,
+  toolAllowed,
+} from "../governance/policy.js";
 import {
   clampQueryLimit,
   validateReadOnlySql,
 } from "../sql/validateReadOnly.js";
 
+/** A failed query whose engine error text was withheld; see runQuery. */
+export class QueryFailedError extends Error {
+  constructor() {
+    super(
+      "The query failed while running. The database's error text is withheld because this " +
+        "database has redacted columns and engine errors can echo row values. Check that every " +
+        "function receives arguments of the type it expects.",
+    );
+    this.name = "QueryFailedError";
+  }
+}
+
+export interface DatabaseServiceOptions {
+  audit?: AuditLog;
+  /** Injectable clock, for rate-limit tests. */
+  now?: () => number;
+}
+
 export class DatabaseService {
-  constructor(private readonly registry: DatabaseRegistry) {}
+  private readonly limiters = new Map<string, RateLimiter>();
+
+  constructor(
+    private readonly registry: DatabaseRegistry,
+    private readonly options: DatabaseServiceOptions = {},
+  ) {}
 
   listDatabases(): DatabaseSummary[] {
-    return this.registry.listDatabases();
+    const started = Date.now();
+    const databases = this.registry.listDatabases();
+    this.audit({ tool: "list_databases", outcome: "ok", ms: Date.now() - started });
+    return databases;
   }
 
   async listTables(databaseId: string, schema?: string): Promise<TableInfo[]> {
-    const adapter = await this.getSqlAdapter(databaseId);
-    return adapter.listTables(schema);
+    return this.audited({ tool: "list_tables", database_id: databaseId }, async () => {
+      this.requireTool(databaseId, "list_tables");
+      const adapter = await this.getSqlAdapter(databaseId);
+      const tables = await adapter.listTables(schema);
+      // Under a table policy, tables the agent may not read are not listed:
+      // their names and shapes are part of what the policy withholds.
+      const policy = this.registry.getPolicy(databaseId);
+      if (!hasTablePolicy(policy)) return tables;
+      return tables.filter((t) => relationAllowed(policy, qualify(adapter.type, t.name, t.schema)));
+    });
   }
 
   async describeTable(
@@ -23,8 +76,15 @@ export class DatabaseService {
     table: string,
     schema?: string,
   ): Promise<ColumnInfo[]> {
-    const adapter = await this.getSqlAdapter(databaseId);
-    return adapter.describeTable(table, schema);
+    return this.audited({ tool: "describe_table", database_id: databaseId }, async () => {
+      this.requireTool(databaseId, "describe_table");
+      const adapter = await this.getSqlAdapter(databaseId);
+      const policy = this.registry.getPolicy(databaseId);
+      if (hasTablePolicy(policy) && !relationAllowed(policy, qualify(adapter.type, table, schema))) {
+        throw new PolicyError("tables", `Table "${table}" is outside this database's table policy.`);
+      }
+      return adapter.describeTable(table, schema);
+    });
   }
 
   async runQuery(
@@ -32,14 +92,144 @@ export class DatabaseService {
     sql: string,
     limit?: number,
   ): Promise<QueryResult> {
-    const adapter = await this.getSqlAdapter(databaseId);
-    const effectiveLimit = clampQueryLimit(limit);
-    const safeSql = validateReadOnlySql(sql, effectiveLimit);
-    return adapter.executeReadQuery(safeSql, effectiveLimit);
+    return this.audited({ tool: "run_query", database_id: databaseId, sql }, async (entry) => {
+      this.requireTool(databaseId, "run_query");
+      const policy = this.registry.getPolicy(databaseId);
+      const adapter = await this.getSqlAdapter(databaseId);
+
+      const effectiveLimit = clampQueryLimit(limit, this.registry.rowLimits(databaseId));
+      const safeSql = validateReadOnlySql(sql, effectiveLimit);
+
+      const tablesGoverned = hasTablePolicy(policy);
+      const patterns = redactPatterns(policy);
+      const isExplain = /^\s*EXPLAIN\b/i.test(safeSql);
+      if (isExplain && (tablesGoverned || patterns.length > 0)) {
+        throw new PolicyError(
+          "explain",
+          "EXPLAIN is not available on a database with a table or column policy.",
+        );
+      }
+
+      if (policy?.rateLimit) this.limiter(databaseId, policy.rateLimit.queriesPerMinute).take();
+
+      // Plan when a policy needs to know what the query reads. MySQL has no
+      // reliable plan (aliases), so it never plans; config load already
+      // refuses a MySQL table policy, and redaction there works by name.
+      const needsPlan = adapter.type !== "mysql" && (tablesGoverned || patterns.length > 0);
+      const readOptions: ReadQueryOptions = {
+        ...(policy?.timeoutMs ? { timeoutMs: policy.timeoutMs } : {}),
+        ...(needsPlan
+          ? {
+              onPlan: (relations: string[]) => {
+                entry.tables = relations; // recorded even when the check refuses
+                checkRelations(policy, relations);
+              },
+            }
+          : {}),
+        ...(patterns.length > 0 ? { withOrigins: true } : {}),
+      };
+
+      // An engine error raised WHILE the query runs can carry row values in its
+      // text (SQLite: json_extract('{}', email) -> "bad JSON path: '<email>'"),
+      // and it is thrown before redaction can see a result. So on a database
+      // with redacted columns, execution-time errors are replaced with a
+      // generic message, for the caller and the audit log alike. Errors from
+      // parsing and planning (before onPlan returns) carry no row data and pass
+      // through, so the agent can still fix a typo. MySQL never plans, so every
+      // error there is treated as execution-time.
+      let planned = false;
+      if (readOptions.onPlan) {
+        const check = readOptions.onPlan;
+        readOptions.onPlan = (relations) => {
+          check(relations);
+          planned = true;
+        };
+      }
+      let outcome;
+      try {
+        outcome = await adapter.executeReadQuery(safeSql, effectiveLimit, readOptions);
+      } catch (err) {
+        if (patterns.length > 0 && !(err instanceof PolicyError) && (planned || !needsPlan)) {
+          throw new QueryFailedError();
+        }
+        throw err;
+      }
+      if (outcome.relations) entry.tables = outcome.relations;
+
+      const { origins, relations, ...result } = outcome;
+      if (patterns.length === 0) return result;
+
+      const { redactKeys, redactedLabels } = planRedaction({
+        type: adapter.type,
+        patterns,
+        columns: result.columns,
+        origins: origins ?? result.columns.map(() => null),
+        relations,
+        sql: safeSql,
+      });
+      if (redactedLabels.length > 0) entry.redacted = redactedLabels;
+      return {
+        ...result,
+        rows: applyRedaction(result.rows, redactKeys),
+        ...(redactedLabels.length > 0 ? { redacted: redactedLabels } : {}),
+      };
+    });
   }
 
   async close(): Promise<void> {
     await this.registry.closeAll();
+  }
+
+  private requireTool(databaseId: string, tool: ScopedToolName): void {
+    if (!toolAllowed(this.registry.getPolicy(databaseId), tool)) {
+      throw new PolicyError(
+        "tools",
+        `The ${tool} tool is not enabled for database "${databaseId}" by its policy.`,
+      );
+    }
+  }
+
+  private limiter(databaseId: string, perMinute: number): RateLimiter {
+    let limiter = this.limiters.get(databaseId);
+    if (!limiter) {
+      limiter = new RateLimiter(perMinute, this.options.now);
+      this.limiters.set(databaseId, limiter);
+    }
+    return limiter;
+  }
+
+  /** Run a tool body and write exactly one audit line, whatever happens. */
+  private async audited<T>(
+    base: Omit<AuditEntry, "outcome" | "ms">,
+    body: (entry: Partial<AuditEntry>) => Promise<T>,
+  ): Promise<T> {
+    const started = Date.now();
+    const extra: Partial<AuditEntry> = {};
+    try {
+      const result = await body(extra);
+      const r = result as unknown as Partial<QueryResult>;
+      const counts =
+        r && typeof r === "object" && typeof r.rowCount === "number"
+          ? { rowCount: r.rowCount, truncated: r.truncated }
+          : {};
+      this.audit({ ...base, ...extra, ...counts, outcome: "ok", ms: Date.now() - started });
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.audit({
+        ...base,
+        ...extra,
+        outcome: err instanceof PolicyError ? "refused" : "error",
+        ...(err instanceof PolicyError ? { rule: err.rule } : {}),
+        reason: message,
+        ms: Date.now() - started,
+      });
+      throw err;
+    }
+  }
+
+  private audit(entry: AuditEntry): void {
+    this.options.audit?.record(entry);
   }
 
   /**
@@ -58,4 +248,10 @@ export class DatabaseService {
     }
     return adapter;
   }
+}
+
+/** Qualify a table the way the adapter's plan names it: "schema.table" except on SQLite. */
+function qualify(type: string, table: string, schema?: string): string {
+  if (type === "sqlite") return table;
+  return `${schema ?? (type === "postgres" ? "public" : "")}.${table}`.replace(/^\./, "");
 }

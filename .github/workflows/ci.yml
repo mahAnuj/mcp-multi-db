@@ -11,6 +11,22 @@ jobs:
     strategy:
       matrix:
         node-version: [22.x, 24.x]
+    # A throwaway Postgres for the governance integration tests
+    # (test/governance.postgres.test.ts), which skip when no URL is set.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MCP_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
