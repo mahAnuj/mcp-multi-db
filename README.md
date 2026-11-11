@@ -29,6 +29,13 @@ safe to point at real data.
   metadata before it writes a query.
 - **Zero query language to learn** — just ask in natural language.
 
+**What an agent sees with a policy on** — a denied table stays denied even
+behind a CTE, a redacted column stays redacted even when renamed with `AS`,
+and writes are refused. Real output; reproduce it with
+`node examples/demo/run-demo.mjs` after `npm run build`.
+
+![An MCP client's run_query calls against mcp-multi-db: emails come back redacted, queries on the denied api_keys table are refused including through a CTE, and a DELETE is refused](docs/images/demo-session.png)
+
 ![Demo: the MCP server listing databases, inspecting schema, running a read-only query, and refusing a write](docs/demo.gif)
 
 > The clip drives the real server over stdio (via the MCP SDK) against a seeded
