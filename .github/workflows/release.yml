@@ -1,0 +1,56 @@
+name: Release
+
+# Publishes to npm when a GitHub release is published, so a release is one
+# click on github.com instead of a manual `npm publish` from a laptop.
+#
+# Uses npm trusted publishing (OIDC): no npm token is stored anywhere, and the
+# package gets a provenance statement linking it to this workflow run.
+# One-time setup on npmjs.com -> mcp-multi-db -> Settings -> Trusted Publisher
+# -> GitHub Actions:
+#   Organization or user: mahAnuj   Repository: mcp-multi-db
+#   Workflow filename: release.yml  Environment: (leave empty)
+#
+# Release: bump "version" in package.json and src/index.ts, merge to main, then
+# create a GitHub release whose tag is v<version> (e.g. v1.1.2).
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # trusted publishing and provenance; nothing else
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MCP_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@latest
+      - name: Release tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          test "$tag" = "$pkg" || { echo "release tag v$tag does not match package.json $pkg"; exit 1; }
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm publish --provenance --access public

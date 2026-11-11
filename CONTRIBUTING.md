@@ -106,3 +106,17 @@ from one real adapter rather than speculatively.
 Include the engine and version, the tool you called, the arguments, and the full
 error. **Redact connection strings and credentials.** A failing query that
 reproduces it is ideal.
+
+## Releasing
+
+Publishing to npm is automatic: `.github/workflows/release.yml` runs when a
+GitHub release is published, checks that the release tag (`v1.2.3`) matches
+`package.json`, runs the build and the full test suite (with a Postgres
+service for the governance integration tests), and publishes with npm trusted
+publishing and provenance. No npm token is stored in the repository.
+
+1. Bump `version` in `package.json` and in `src/index.ts`, and add
+   `RELEASE_NOTES_v<version>.md`.
+2. Merge to `main`.
+3. Create a GitHub release with tag `v<version>` and the release notes.
+
