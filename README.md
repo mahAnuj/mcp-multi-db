@@ -4,6 +4,7 @@
 [![npm downloads](https://img.shields.io/npm/dm/mcp-multi-db.svg)](https://www.npmjs.com/package/mcp-multi-db)
 [![license](https://img.shields.io/npm/l/mcp-multi-db.svg)](LICENSE)
 [![mcp-multi-db MCP server](https://glama.ai/mcp/servers/mahAnuj/mcp-multi-db/badges/score.svg)](https://glama.ai/mcp/servers/mahAnuj/mcp-multi-db)
+[![M8ven Verified](https://m8ven.ai/badge/mcp/mahanuj-mcp-multi-db-1dz3qj?variant=verified&v=3abe07628301cdb645fd676a67e656fa)](https://m8ven.ai/mcp/mahanuj-mcp-multi-db-1dz3qj?s=readme)
 
 **One MCP server for all your SQL databases — read-only and safe by default.**
 
